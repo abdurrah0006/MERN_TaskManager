@@ -6,6 +6,10 @@ The application provides a centralized workspace where users can create projects
 
 Built using **Node.js, Express.js, MongoDB, HTML, CSS, and JavaScript**, with JWT authentication and Socket.IO for real-time collaboration.
 
+### 📊 Dashboard
+
+![Dashboard](image/Dashboard.png)
+
 ---
 
 ## ✨ Features
@@ -505,29 +509,27 @@ Make sure the frontend origin matches `CLIENT_URL` in your backend environment c
 
 Add your application screenshots here after completing the UI.
 
-### 🏠 Welcome Page
 
-![Welcome Page](images/home.png)
 
-### 🔐 Authentication
+### 🔐 Login
 
-![Login Page](images/login.png)
+![Login Page](images/Login.png)
 
-### 📊 Dashboard
+### 🔐 Register
 
-![Dashboard](images/dashboard.png)
+![Register Page](image/Register.png)
 
-### 📌 Project Board
+### 📌 Task Board
 
-![Kanban Board](images/board.png)
+![Task Board](image/Tasks.png)
 
-### 📝 Task Details
+### 👤 Profile
 
-![Task Details](images/task.png)
+![Profile](image/Profile.png)
 
 ### 🔔 Notifications
 
-![Notifications](images/notifications.png)
+![Notifications](image/Notifications.png)
 
 ---
 

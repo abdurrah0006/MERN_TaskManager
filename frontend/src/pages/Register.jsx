@@ -1,98 +1,66 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import { API_BASE } from "../api";
+import { Link, useNavigate } from "react-router-dom";
+import { LuMail, LuUser } from "react-icons/lu";
+import { api } from "../api";
+import { useAuth } from "../context/AuthContext";
+import Alert from "../components/Alert";
+import AuthLayout from "../components/AuthLayout";
+import { Field, PasswordField } from "../components/Field";
 
-function Register() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+export default function Register() {
+  const { signIn } = useAuth();
   const navigate = useNavigate();
+  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const set = (key) => (event) => setForm((f) => ({ ...f, [key]: event.target.value }));
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
-
+    setLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/auth/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Registration failed");
-
-      localStorage.setItem("token", data.token);
-      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
-      navigate("/dashboard");
+      signIn(await api.post("/auth/register", form));
+      navigate("/dashboard", { replace: true });
     } catch (err) {
       setError(err.message);
+      setLoading(false);
     }
   };
 
   return (
-    <main className="page page-auth">
-      <div className="auth-split">
-        {/* 20% Structure / Contrast Accent Sidebar */}
-        <aside className="auth-side">
-          <h2>Create your staging workspace.</h2>
-          <p>
-            Get started quickly — create an account to plan your work cycles, arrange project tracking, 
-            and stream team progress indicators on custom kanban tracks.
-          </p>
-          <ul className="auth-features">
-            <li>Fully customizable workflow pipelines</li>
-            <li>Real-time data event sync</li>
-            <li>Optimized task execution matrices</li>
-          </ul>
-        </aside>
-
-        {/* 80% High-Contrast Minimal White Form Area */}
-        <div className="form-panel">
-          <div className="form-intro">
-            <span className="eyebrow" style={{ color: "var(--accent-orange)" }}>
-              Workspace Onboarding
-            </span>
-            <h2>Register Account</h2>
-            <p>Fill out the profile attributes below to initialize your credentials.</p>
-          </div>
-          
-          <form onSubmit={handleSubmit} className="auth-form">
-            <input
-              type="text"
-              placeholder="Full Name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              required
-            />
-            <input
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-            <button type="submit" className="primary-button">
-              Create Profile
-            </button>
-            {error && <div className="error">{error}</div>}
-          </form>
-
-          <p className="form-footer">
-            Already have an active account? <Link to="/login">Login here</Link>
-          </p>
-        </div>
-      </div>
-    </main>
+    <AuthLayout
+      title="Create your account"
+      subtitle="Set up your workspace and start tracking tasks."
+      footer={<>Already have an account? <Link to="/login">Sign in</Link></>}
+    >
+      <form onSubmit={handleSubmit} className="stack">
+        <Alert>{error}</Alert>
+        <Field label="Full name" icon={LuUser}>
+          {({ id }) => (
+            <input id={id} value={form.name} onChange={set("name")} placeholder="Alex Morgan" autoComplete="name" maxLength={60} required autoFocus />
+          )}
+        </Field>
+        <Field label="Email" icon={LuMail}>
+          {({ id }) => (
+            <input id={id} type="email" value={form.email} onChange={set("email")} placeholder="you@company.com" autoComplete="email" required />
+          )}
+        </Field>
+        <PasswordField
+          hint="Use at least 6 characters."
+          value={form.password}
+          onChange={set("password")}
+          placeholder="Create a password"
+          autoComplete="new-password"
+          minLength={6}
+          required
+        />
+        <button className="btn btn-primary btn-lg btn-block" disabled={loading}>
+          {loading && <span className="spinner" />}
+          Create account
+        </button>
+      </form>
+    </AuthLayout>
   );
 }
-
-export default Register;

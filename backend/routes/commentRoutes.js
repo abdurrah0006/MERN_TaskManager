@@ -1,14 +1,11 @@
-const express = require("express");
-const router = express.Router();
-
+const router = require("express").Router();
 const protect = require("../middleware/authMiddleware");
+const c = require("../controllers/commentController");
 
-const {
-  addComment,
-  getComments,
-} = require("../controllers/commentController");
+router.use(protect);
 
-router.post("/", protect, addComment);
-router.get("/:taskId", protect, getComments);
+router.post("/", c.addComment);
+router.get("/:taskId", c.getComments);
+router.delete("/:id", c.deleteComment);
 
 module.exports = router;

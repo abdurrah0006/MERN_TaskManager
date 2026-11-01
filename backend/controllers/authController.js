@@ -1,62 +1,79 @@
 const User = require("../models/User");
-const bcrypt = require("bcryptjs");
 const generateToken = require("../utils/generateToken");
+const HttpError = require("../utils/HttpError");
 
-// REGISTER
+const MIN_PASSWORD = 6;
+const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+
+const authResponse = (user) => ({ user: user.toPublic(), token: generateToken(user._id) });
+
 exports.registerUser = async (req, res) => {
-  const { name, email, password } = req.body;
+  const name = String(req.body.name || "").trim();
+  const email = normalizeEmail(req.body.email);
+  const password = String(req.body.password || "");
 
-  try {
-    const userExists = await User.findOne({ email });
-
-    if (userExists) {
-      return res.status(400).json({ message: "User already exists" });
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    const user = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-    });
-
-    res.status(201).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      token: generateToken(user._id),
-    });
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  if (!name || !email || !password) {
+    throw new HttpError(400, "Name, email and password are required");
   }
+  if (password.length < MIN_PASSWORD) {
+    throw new HttpError(400, `Password must be at least ${MIN_PASSWORD} characters`);
+  }
+  if (await User.exists({ email })) {
+    throw new HttpError(409, "An account with this email already exists");
+  }
+
+  const user = await User.create({ name, email, password });
+  res.status(201).json(authResponse(user));
 };
 
-// LOGIN
 exports.loginUser = async (req, res) => {
-  const { email, password } = req.body;
+  const email = normalizeEmail(req.body.email);
+  const password = String(req.body.password || "");
 
-  try {
-    const user = await User.findOne({ email });
-
-    if (user && await bcrypt.compare(password, user.password)) {
-      res.json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        token: generateToken(user._id),
-      });
-    } else {
-      res.status(401).json({ message: "Invalid email or password" });
-    }
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  const user = await User.findOne({ email }).select("+password");
+  if (!user || !(await user.matchPassword(password))) {
+    throw new HttpError(401, "Invalid email or password");
   }
+
+  res.json(authResponse(user));
 };
 
 exports.getMe = async (req, res) => {
-  res.json(req.user);
+  res.json({ user: req.user.toPublic() });
+};
+
+exports.updateProfile = async (req, res) => {
+  const name = String(req.body.name ?? req.user.name).trim();
+  const email = normalizeEmail(req.body.email ?? req.user.email);
+
+  if (!name || !email) throw new HttpError(400, "Name and email are required");
+
+  if (email !== req.user.email && (await User.exists({ email }))) {
+    throw new HttpError(409, "An account with this email already exists");
+  }
+
+  req.user.name = name;
+  req.user.email = email;
+  await req.user.save();
+
+  res.json({ user: req.user.toPublic() });
+};
+
+exports.changePassword = async (req, res) => {
+  const currentPassword = String(req.body.currentPassword || "");
+  const newPassword = String(req.body.newPassword || "");
+
+  if (newPassword.length < MIN_PASSWORD) {
+    throw new HttpError(400, `New password must be at least ${MIN_PASSWORD} characters`);
+  }
+
+  const user = await User.findById(req.user._id).select("+password");
+  if (!(await user.matchPassword(currentPassword))) {
+    throw new HttpError(400, "Current password is incorrect");
+  }
+
+  user.password = newPassword;
+  await user.save();
+
+  res.json({ message: "Password updated" });
 };

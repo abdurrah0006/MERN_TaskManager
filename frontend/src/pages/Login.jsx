@@ -1,76 +1,53 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import { API_BASE } from "../api";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { LuMail } from "react-icons/lu";
+import { api } from "../api";
+import { useAuth } from "../context/AuthContext";
+import Alert from "../components/Alert";
+import AuthLayout from "../components/AuthLayout";
+import { Field, PasswordField } from "../components/Field";
 
-function Login() {
+export default function Login() {
+  const { signIn } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
+    setLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Login failed");
-      localStorage.setItem("token", data.token);
-      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
-      navigate("/dashboard");
+      signIn(await api.post("/auth/login", { email, password }));
+      navigate(location.state?.from || "/dashboard", { replace: true });
     } catch (err) {
       setError(err.message);
+      setLoading(false);
     }
   };
 
   return (
-    <main className="page page-auth">
-      <div className="auth-split">
-        <aside className="auth-side">
-          <h2>Accelerate your production cycles.</h2>
-          <p>Sign in to access your boards, monitor active issues, and map out sprint timelines.</p>
-          <ul className="auth-features">
-            <li>Visualize operational structures</li>
-            <li>Low-latency user syncronisation</li>
-            <li>Adaptive board states</li>
-          </ul>
-        </aside>
-
-        <div className="form-panel">
-          <div className="form-intro">
-            <span className="eyebrow">Authentication Portal</span>
-            <h2>Sign in to Workspace</h2>
-            <p>Provide your system credentials below.</p>
-          </div>
-          <form onSubmit={handleSubmit} className="auth-form">
-            <input
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-            <button type="submit" className="primary-button">Continue to Dashboard</button>
-            {error && <div className="error">{error}</div>}
-          </form>
-          <p className="form-footer">
-            New user? <Link to="/register">Register New Account</Link>
-          </p>
-        </div>
-      </div>
-    </main>
+    <AuthLayout
+      title="Welcome back"
+      subtitle="Sign in to open your projects."
+      footer={<>New to Tracker? <Link to="/register">Create an account</Link></>}
+    >
+      <form onSubmit={handleSubmit} className="stack">
+        <Alert>{error}</Alert>
+        <Field label="Email" icon={LuMail}>
+          {({ id }) => (
+            <input id={id} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" required autoFocus />
+          )}
+        </Field>
+        <PasswordField value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Your password" autoComplete="current-password" required />
+        <button className="btn btn-primary btn-lg btn-block" disabled={loading}>
+          {loading && <span className="spinner" />}
+          Sign in
+        </button>
+      </form>
+    </AuthLayout>
   );
 }
-
-export default Login;

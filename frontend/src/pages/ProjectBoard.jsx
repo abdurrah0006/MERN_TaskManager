@@ -1,209 +1,309 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { request } from "../api";
-import { initSocket } from "../socket";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { LuChevronLeft, LuPlus, LuSearch, LuSettings2, LuUsers } from "react-icons/lu";
+import { api } from "../api";
+import { useAuth } from "../context/AuthContext";
+import { useConfirm } from "../context/ConfirmContext";
+import { PRIORITIES, cx, upsertById } from "../utils";
+import Alert from "../components/Alert";
+import { AvatarStack } from "../components/Avatar";
+import Column from "../components/Column";
+import MembersModal from "../components/MembersModal";
+import NameModal from "../components/NameModal";
+import ProjectFormModal from "../components/ProjectFormModal";
+import TaskModal from "../components/TaskModal";
 
-const defaultColumns = [
-  { id: "todo", title: "To Do", status: "To Do", description: "Pending queue targets." },
-  { id: "progress", title: "In Progress", status: "In Progress", description: "Currently being tracked." },
-  { id: "done", title: "Done", status: "Done", description: "Verified production releases." },
-];
-
-function ProjectBoard() {
+export default function ProjectBoard() {
+  const { id } = useParams();
+  const { user, socket } = useAuth();
   const navigate = useNavigate();
+  const confirm = useConfirm();
+
+  const [project, setProject] = useState(null);
   const [tasks, setTasks] = useState([]);
-  const [columns, setColumns] = useState(defaultColumns);
-  const [taskTitle, setTaskTitle] = useState("");
-  const [taskDescription, setTaskDescription] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState(defaultColumns[0].status);
-  const [newColumnName, setNewColumnName] = useState("");
-  const [newColumnDesc, setNewColumnDesc] = useState("");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const projectId = localStorage.getItem("projectId");
-  const user = JSON.parse(localStorage.getItem("user") || "null");
-  const storageKey = `boardColumns_${projectId}`;
 
+  const [filters, setFilters] = useState({ query: "", priority: "", mine: false });
+  const [modal, setModal] = useState(null); // { type, ...data }
+  const closeModal = () => setModal(null);
+
+  const loadTasks = useCallback(
+    () => api.get(`/tasks/project/${id}`).then(setTasks),
+    [id]
+  );
+
+  // Initial load.
   useEffect(() => {
-    if (!projectId) { navigate("/dashboard"); return; }
-    loadColumns();
-    loadTasks();
-    
-    const socket = initSocket(user?._id);
-    socket.emit("joinProject", projectId);
-    const reloadTasks = () => loadTasks();
+    setLoading(true);
+    setError("");
+    Promise.all([api.get(`/projects/${id}`), loadTasks()])
+      .then(([loadedProject]) => setProject(loadedProject))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [id, loadTasks]);
 
-    socket.on("taskCreated", reloadTasks);
-    socket.on("taskUpdated", reloadTasks);
-    socket.on("taskDeleted", reloadTasks);
-    socket.on("commentAdded", reloadTasks);
+  // Live updates from teammates.
+  useEffect(() => {
+    if (!socket) return;
+    const join = () => socket.emit("joinProject", id);
+    join();
+
+    const onTask = (task) => task.project === id && setTasks((list) => upsertById(list, task));
+    const onTaskDeleted = ({ _id }) => setTasks((list) => list.filter((t) => t._id !== _id));
+    const onProject = (updated) => {
+      if (updated._id !== id) return;
+      setProject(updated);
+      loadTasks().catch(() => {});
+    };
+    const onRemoved = ({ projectId }) => projectId === id && navigate("/dashboard", { replace: true });
+
+    socket.on("connect", join);
+    socket.on("taskCreated", onTask);
+    socket.on("taskUpdated", onTask);
+    socket.on("taskDeleted", onTaskDeleted);
+    socket.on("projectUpdated", onProject);
+    socket.on("projectRemoved", onRemoved);
 
     return () => {
-      socket.off("taskCreated", reloadTasks);
-      socket.off("taskUpdated", reloadTasks);
-      socket.off("taskDeleted", reloadTasks);
-      socket.off("commentAdded", reloadTasks);
+      socket.emit("leaveProject", id);
+      socket.off("connect", join);
+      socket.off("taskCreated", onTask);
+      socket.off("taskUpdated", onTask);
+      socket.off("taskDeleted", onTaskDeleted);
+      socket.off("projectUpdated", onProject);
+      socket.off("projectRemoved", onRemoved);
     };
-  }, [navigate, projectId]);
+  }, [socket, id, navigate, loadTasks]);
 
-  const loadColumns = () => {
-    const stored = localStorage.getItem(storageKey);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        setColumns(parsed);
-        setSelectedStatus(parsed[0]?.status || defaultColumns[0].status);
-        return;
-      } catch {}
-    }
-    setColumns(defaultColumns);
-    setSelectedStatus(defaultColumns[0].status);
-  };
-
-  const persistColumns = (updatedColumns) => {
-    setColumns(updatedColumns);
-    localStorage.setItem(storageKey, JSON.stringify(updatedColumns));
-  };
-
-  const ensureTaskStatusesInColumns = (taskList) => {
-    const extraStatuses = Array.from(
-      new Set(
-        taskList
-          .map((task) => task.status || "To Do")
-          .filter((status) => !columns.some((column) => column.status === status))
-      )
+  const visibleTasks = useMemo(() => {
+    const query = filters.query.trim().toLowerCase();
+    return tasks.filter(
+      (t) =>
+        (!query || `${t.title} ${t.description}`.toLowerCase().includes(query)) &&
+        (!filters.priority || t.priority === filters.priority) &&
+        (!filters.mine || t.assignedTo?._id === user._id)
     );
-    if (extraStatuses.length > 0) {
-      const newColumns = [
-        ...columns,
-        ...extraStatuses.map((status) => ({
-          id: `col-${status.replace(/\s+/g, "-").toLowerCase()}`,
-          title: status,
-          status,
-          description: "Custom stage trace.",
-        })),
-      ];
-      persistColumns(newColumns);
+  }, [tasks, filters, user._id]);
+
+  const isFiltering = Boolean(filters.query || filters.priority || filters.mine);
+
+  // ---- Task actions ----
+  const moveTask = async (taskId, status) => {
+    const task = tasks.find((t) => t._id === taskId);
+    if (!task || task.status === status) return;
+
+    setTasks((list) => list.map((t) => (t._id === taskId ? { ...t, status } : t)));
+    try {
+      await api.put(`/tasks/${taskId}`, { status });
+    } catch (err) {
+      setTasks((list) => list.map((t) => (t._id === taskId ? task : t)));
+      setError(err.message);
     }
-    return taskList.map((task) => ({ ...task, status: task.status || "To Do" }));
   };
 
-  const loadTasks = async () => {
-    if (!projectId) return;
+  const quickAdd = async (status, title) => {
     try {
-      const data = await request(`/tasks/${projectId}`);
-      setTasks(ensureTaskStatusesInColumns(data));
-    } catch (err) { setError(err.message); }
+      const task = await api.post("/tasks", { projectId: id, title, status });
+      setTasks((list) => upsertById(list, task));
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
-  const createTask = async (event) => {
-    event.preventDefault();
-    if (!taskTitle.trim()) return;
+  // ---- Column actions ----
+  const applyProject = (updated) => {
+    setProject(updated);
+    loadTasks().catch(() => {});
+  };
+
+  const deleteColumn = async (name) => {
+    const count = tasks.filter((t) => t.status === name).length;
+    const ok = await confirm({
+      title: `Delete "${name}"?`,
+      message: count
+        ? `${count} task${count === 1 ? "" : "s"} will move to the first remaining column.`
+        : "This column is empty.",
+      confirmLabel: "Delete column",
+    });
+    if (!ok) return;
     try {
-      await request("/tasks", {
-        method: "POST",
-        body: JSON.stringify({ title: taskTitle, description: taskDescription, projectId, status: selectedStatus }),
-      });
-      setTaskTitle(""); setTaskDescription(""); loadTasks();
-    } catch (err) { setError(err.message); }
+      applyProject(await api.delete(`/projects/${id}/columns/${encodeURIComponent(name)}`));
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
-  const createColumn = (event) => {
-    event.preventDefault();
-    if (!newColumnName.trim()) return;
-    const newColumn = {
-      id: `col-${Date.now()}`,
-      title: newColumnName,
-      status: newColumnName,
-      description: newColumnDesc || "Custom lifecycle.",
-    };
-    const updatedColumns = [...columns, newColumn];
-    persistColumns(updatedColumns);
-    setNewColumnName(""); setNewColumnDesc(""); setSelectedStatus(newColumn.status);
-  };
-
-  const updateTaskStatus = async (taskId, status) => {
+  const deleteProject = async () => {
+    const ok = await confirm({
+      title: `Delete "${project.name}"?`,
+      message: "All tasks and comments in this project will be permanently deleted.",
+      confirmLabel: "Delete project",
+    });
+    if (!ok) return;
     try {
-      await request(`/tasks/${taskId}`, { method: "PUT", body: JSON.stringify({ status }) });
-      loadTasks();
-    } catch (err) { setError(err.message); }
+      await api.delete(`/projects/${id}`);
+      navigate("/dashboard", { replace: true });
+    } catch (err) {
+      setError(err.message);
+    }
   };
+
+  if (loading) {
+    return <div className="page-loader"><span className="spinner spinner-lg" /></div>;
+  }
+
+  if (!project) {
+    return (
+      <div className="page">
+        <Link to="/dashboard" className="back-link"><LuChevronLeft size={16} />Dashboard</Link>
+        <Alert>{error || "Project not found"}</Alert>
+      </div>
+    );
+  }
+
+  const isOwner = project.owner === user._id;
+  const lastColumn = project.columns[project.columns.length - 1];
 
   return (
-    <main className="page page-board">
-      <div className="board-header">
-        <div>
-          <span className="eyebrow">Kanban Canvas</span>
-          <h2>Sprint Architecture</h2>
-          <p>Drag task cards across tracking blocks to update work stage parameters live.</p>
+    <div className="page page-board">
+      <header className="board-header">
+        <div className="board-title">
+          <Link to="/dashboard" className="back-link"><LuChevronLeft size={16} />Dashboard</Link>
+          <h1>{project.name}</h1>
+          {project.description && <p className="text-muted">{project.description}</p>}
         </div>
-        <button className="secondary-button" onClick={() => navigate("/dashboard")}>Exit Board</button>
-      </div>
+        <div className="board-actions">
+          <button className="btn btn-secondary" onClick={() => setModal({ type: "members" })}>
+            <AvatarStack people={project.members} max={3} size="xs" />
+            <LuUsers size={16} />
+            Members
+          </button>
+          {isOwner && (
+            <button className="btn btn-secondary btn-icon" onClick={() => setModal({ type: "settings" })} aria-label="Project settings">
+              <LuSettings2 size={18} />
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => setModal({ type: "task", task: null })}>
+            <LuPlus size={16} />
+            New task
+          </button>
+        </div>
+      </header>
 
-      {error && <div className="error">{error}</div>}
+      <Alert onDismiss={() => setError("")}>{error}</Alert>
 
-      <div className="controls-row">
-        <section className="new-column-panel">
-          <h4 className="controls-title">Append Stage</h4>
-          <form onSubmit={createColumn} className="column-form">
-            <input value={newColumnName} onChange={(e) => setNewColumnName(e.target.value)} placeholder="Stage key..." />
-            <input value={newColumnDesc} onChange={(e) => setNewColumnDesc(e.target.value)} placeholder="Description metadata..." />
-            <button type="submit" className="secondary-button">Add Column</button>
-          </form>
-        </section>
-
-        <section className="task-create-panel">
-          <h4 className="controls-title">Insert Work-Item</h4>
-          <form onSubmit={createTask} className="task-form">
-            <input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Issue title..." />
-            <input value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} placeholder="Details..." />
-            <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}>
-              {columns.map((c) => (<option key={c.id} value={c.status}>{c.title}</option>))}
-            </select>
-            <button type="submit" className="primary-button">Commit Task</button>
-          </form>
-        </section>
+      <div className="board-toolbar">
+        <div className="input-wrap has-icon toolbar-search">
+          <LuSearch size={16} className="input-icon" />
+          <input
+            value={filters.query}
+            onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
+            placeholder="Search tasks"
+            aria-label="Search tasks"
+          />
+        </div>
+        <select
+          className="toolbar-select"
+          value={filters.priority}
+          onChange={(e) => setFilters((f) => ({ ...f, priority: e.target.value }))}
+          aria-label="Filter by priority"
+        >
+          <option value="">All priorities</option>
+          {PRIORITIES.map((p) => (
+            <option key={p.value} value={p.value}>{p.label} priority</option>
+          ))}
+        </select>
+        <button
+          className={cx("btn", filters.mine ? "btn-primary" : "btn-secondary")}
+          onClick={() => setFilters((f) => ({ ...f, mine: !f.mine }))}
+          aria-pressed={filters.mine}
+        >
+          Assigned to me
+        </button>
+        {isFiltering && (
+          <button className="btn btn-ghost" onClick={() => setFilters({ query: "", priority: "", mine: false })}>
+            Clear filters
+          </button>
+        )}
       </div>
 
       <div className="board">
-        {columns.map((column) => (
-          <section
-            key={column.id}
-            className="column"
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              const id = e.dataTransfer.getData("text/plain");
-              if (id) updateTaskStatus(id, column.status);
-            }}
-          >
-            <div className="column-title">
-              <div>
-                <h3>{column.title}</h3>
-                <p className="column-description">{column.description}</p>
-              </div>
-              <span>{tasks.filter((t) => t.status === column.status).length}</span>
-            </div>
-            
-            <div className="column-list">
-              {tasks.filter((t) => t.status === column.status).map((task) => (
-                <div
-                  key={task._id}
-                  className="task-card"
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData("text/plain", task._id);
-                    e.dataTransfer.effectAllowed = "move";
-                  }}
-                >
-                  <div className="task-card-title">{task.title}</div>
-                  {task.description && <p className="task-card-desc">{task.description}</p>}
-                </div>
-              ))}
-            </div>
-          </section>
+        {project.columns.map((name) => (
+          <Column
+            key={name}
+            name={name}
+            done={name === lastColumn}
+            tasks={visibleTasks.filter((t) => t.status === name)}
+            canDelete={project.columns.length > 1}
+            onDropTask={(taskId) => moveTask(taskId, name)}
+            onOpenTask={(task) => setModal({ type: "task", task })}
+            onQuickAdd={(title) => quickAdd(name, title)}
+            onRename={() => setModal({ type: "rename", name })}
+            onDelete={() => deleteColumn(name)}
+          />
         ))}
+
+        <button className="board-add-column" onClick={() => setModal({ type: "column" })}>
+          <LuPlus size={16} />
+          Add column
+        </button>
       </div>
-    </main>
+
+      {modal?.type === "task" && (
+        <TaskModal
+          project={project}
+          task={modal.task}
+          onClose={closeModal}
+          onUpsert={(task) => setTasks((list) => upsertById(list, task))}
+          onRemove={(taskId) => setTasks((list) => list.filter((t) => t._id !== taskId))}
+        />
+      )}
+
+      {modal?.type === "column" && (
+        <NameModal
+          title="Add column"
+          label="Column name"
+          submitLabel="Add column"
+          onClose={closeModal}
+          onSubmit={async (name) => applyProject(await api.post(`/projects/${id}/columns`, { name }))}
+        />
+      )}
+
+      {modal?.type === "rename" && (
+        <NameModal
+          title="Rename column"
+          label="Column name"
+          initial={modal.name}
+          submitLabel="Save name"
+          onClose={closeModal}
+          onSubmit={async (name) =>
+            applyProject(await api.put(`/projects/${id}/columns/${encodeURIComponent(modal.name)}`, { name }))
+          }
+        />
+      )}
+
+      {modal?.type === "members" && (
+        <MembersModal
+          project={project}
+          user={user}
+          onClose={closeModal}
+          onChange={applyProject}
+          onLeft={() => navigate("/dashboard", { replace: true })}
+        />
+      )}
+
+      {modal?.type === "settings" && (
+        <ProjectFormModal
+          project={project}
+          onClose={closeModal}
+          onSaved={(saved) => {
+            setProject(saved);
+            closeModal();
+          }}
+          onDelete={deleteProject}
+        />
+      )}
+    </div>
   );
 }
-
-export default ProjectBoard;

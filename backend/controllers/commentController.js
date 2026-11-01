@@ -1,43 +1,56 @@
 const Comment = require("../models/Comment");
+const HttpError = require("../utils/HttpError");
+const notify = require("../utils/notify");
+const { sameId, getTaskAsMember } = require("../utils/access");
+const { projectRoom } = require("../sockets/socket");
 
-// ADD COMMENT
 exports.addComment = async (req, res) => {
-  try {
-    const comment = await Comment.create({
-      text: req.body.text,
-      task: req.body.taskId,
-      user: req.user._id,
-    });
+  const { task, project } = await getTaskAsMember(req.body.taskId, req.user._id);
 
-    const io = req.app.get("io");
+  const comment = await Comment.create({
+    text: req.body.text,
+    task: task._id,
+    project: project._id,
+    user: req.user._id,
+  });
+  await comment.populate("user", "name email");
 
-    io.to(req.body.projectId).emit("commentAdded", comment);
+  const io = req.app.get("io");
+  io.to(projectRoom(project._id)).emit("commentAdded", comment);
 
-    const notification = await createNotification(
-      req.user._id,
-      "New comment added to a task",
-      "comment"
-    );
+  const recipients = [task.assignedTo, task.createdBy].filter(
+    (id) => id && !sameId(id, req.user._id)
+  );
+  await notify(io, recipients, {
+    message: `${req.user.name} commented on "${task.title}"`,
+    type: "comment",
+    link: `/projects/${project._id}`,
+  });
 
-    io.to(req.user._id.toString()).emit("notification", notification);
-
-    res.status(201).json(comment);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  res.status(201).json(comment);
 };
 
-// GET COMMENTS FOR TASK
 exports.getComments = async (req, res) => {
-  try {
-    const comments = await Comment.find({
-      task: req.params.taskId,
-    })
-      .populate("user", "name email")
-      .sort({ createdAt: -1 });
+  const { task } = await getTaskAsMember(req.params.taskId, req.user._id);
+  const comments = await Comment.find({ task: task._id })
+    .populate("user", "name email")
+    .sort({ createdAt: 1 });
+  res.json(comments);
+};
 
-    res.json(comments);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+exports.deleteComment = async (req, res) => {
+  const comment = await Comment.findById(req.params.id);
+  if (!comment) throw new HttpError(404, "Comment not found");
+
+  const { project } = await getTaskAsMember(comment.task, req.user._id);
+  const canDelete = sameId(comment.user, req.user._id) || sameId(project.owner, req.user._id);
+  if (!canDelete) throw new HttpError(403, "You can only delete your own comments");
+
+  await comment.deleteOne();
+  req.app.get("io").to(projectRoom(project._id)).emit("commentDeleted", {
+    _id: comment._id,
+    task: comment.task,
+  });
+
+  res.json({ message: "Comment deleted" });
 };

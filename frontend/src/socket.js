@@ -1,19 +1,16 @@
 import { io } from "socket.io-client";
+import { SOCKET_URL, getToken } from "./api";
 
-const socket = io("http://localhost:5000", {
-  autoConnect: false,
-});
+let socket = null;
 
-export function initSocket(userId) {
-  if (!socket.connected) {
-    socket.connect();
+export function connectSocket() {
+  if (!socket) {
+    socket = io(SOCKET_URL, { auth: (cb) => cb({ token: getToken() }) });
   }
-
-  if (userId) {
-    socket.emit("joinUser", userId);
-  }
-
   return socket;
 }
 
-export default socket;
+export function disconnectSocket() {
+  socket?.disconnect();
+  socket = null;
+}
