@@ -513,7 +513,7 @@ Add your application screenshots here after completing the UI.
 
 ### 🔐 Login
 
-![Login Page](images/Login.png)
+![Login Page](image/Login.png)
 
 ### 🔐 Register
 
